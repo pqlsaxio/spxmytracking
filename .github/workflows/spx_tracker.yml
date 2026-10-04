@@ -1,0 +1,42 @@
+name: SPX Express Tracker
+
+on:
+  schedule:
+    # cron 表达式：每 15 分钟运行一次 (UTC 时间)
+    - cron: '*/15 * * * *'
+  # 支持在 GitHub 网页手动点击触发
+  workflow_dispatch:
+
+permissions:
+  contents: write  # 允许工作流提交和更新 last_status.txt
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出仓库代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: 执行 SPX 追踪脚本
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python main.py
+
+      - name: 保存并提交状态记录 (保证状态连续)
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add last_status.txt
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update status cache [skip ci]" && git push)
