@@ -1,21 +1,17 @@
 import os
 import requests
 
-# 从环境变量中读取加密信息
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# 要追踪的单号列表（支持同时监控多个包裹）
+# ⚠️ 请确保换成你的真实 SPX 运单号！
 TRACKING_NUMBERS = [
-    "MY260268178425D",
-    # "",
+    "MY260268178425D", # 改成你的真实单号
 ]
 
 CACHE_FILE = "last_status.txt"
 
-
 def load_cached_status():
-    """读取上一次记录的状态"""
     if not os.path.exists(CACHE_FILE):
         return {}
     cached = {}
@@ -26,27 +22,22 @@ def load_cached_status():
                 cached[parts[0]] = parts[1]
     return cached
 
-
 def save_cached_status(status_dict):
-    """保存最新状态到本地缓存文件"""
     with open(CACHE_FILE, "w", encoding="utf-8") as f:
         for tracking_num, status_id in status_dict.items():
             f.write(f"{tracking_num}||{status_id}\n")
 
-
 def send_telegram_msg(message):
-    """发送消息给 Telegram"""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("⚠️ 未配置 Telegram Token 或 Chat ID，跳过发送消息")
+        return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown",
-    }
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try:
-        requests.post(url, json=payload, timeout=10)
+        res = requests.post(url, json=payload, timeout=10)
+        print(f"Telegram 推送结果: {res.status_code}")
     except Exception as e:
         print(f"Telegram 发送异常: {e}")
-
 
 def check_spx_status():
     cached_status = load_cached_status()
@@ -58,47 +49,55 @@ def check_spx_status():
     }
 
     for tracking_num in TRACKING_NUMBERS:
+        print(f"\n🔍 正在查询单号: {tracking_num} ...")
         url = f"https://spx.com.my/api/v2/fleet_order/tracking/search?sls_tracking_number={tracking_num}"
         try:
             res = requests.get(url, headers=headers, timeout=10)
             data = res.json()
+            
+            # 输出返回信息以供调试
+            if data.get("retcode") != 0:
+                print(f"❌ 接口返回异常: {data}")
+                continue
 
-            if data.get("retcode") == 0 and "data" in data:
-                tracks = data["data"].get("tracks", [])
-                if tracks:
-                    latest = tracks[0]
-                    status_time = latest.get("ctime_str", "")
-                    status_desc = latest.get("description", "")
-                    current_id = f"{status_time}_{status_desc}"
+            tracks = data.get("data", {}).get("tracks", [])
+            if not tracks:
+                print(f"⚠️ 未找到单号 {tracking_num} 的物流轨迹，请确认单号正确且已投递。")
+                continue
 
-                    last_id = cached_status.get(tracking_num)
+            latest = tracks[0]
+            status_time = latest.get("ctime_str", "")
+            status_desc = latest.get("description", "")
+            current_id = f"{status_time}_{status_desc}"
+            
+            print(f"✅ 查询成功！最新状态: [{status_time}] {status_desc}")
 
-                    # 1. 首次加入监控
-                    if last_id is None:
-                        updated_status[tracking_num] = current_id
-                        msg = f"📦 *SPX 追踪已初始化*\n单号: `{tracking_num}`\n当前状态: {status_desc}\n时间: {status_time}"
-                        print(msg)
-                        send_telegram_msg(msg)
+            last_id = cached_status.get(tracking_num)
 
-                    # 2. 状态发生更新
-                    elif current_id != last_id:
-                        updated_status[tracking_num] = current_id
-                        msg = (
-                            f"🚨 *SPX 物流状态更新！*\n\n"
-                            f"📦 *单号*: `{tracking_num}`\n"
-                            f"📌 *最新进度*: {status_desc}\n"
-                            f"🕒 *更新时间*: {status_time}"
-                        )
-                        print(msg)
-                        send_telegram_msg(msg)
-                    else:
-                        print(f"单号 {tracking_num} 暂无更新。")
+            # 首次记录
+            if last_id is None:
+                updated_status[tracking_num] = current_id
+                msg = f"📦 *SPX 追踪已初始化*\n单号: `{tracking_num}`\n当前状态: {status_desc}\n时间: {status_time}"
+                send_telegram_msg(msg)
+
+            # 状态有更新
+            elif current_id != last_id:
+                updated_status[tracking_num] = current_id
+                msg = (
+                    f"🚨 *SPX 物流状态更新！*\n\n"
+                    f"📦 *单号*: `{tracking_num}`\n"
+                    f"📌 *最新进度*: {status_desc}\n"
+                    f"🕒 *更新时间*: {status_time}"
+                )
+                send_telegram_msg(msg)
+            else:
+                print(f"ℹ️ 单号 {tracking_num} 状态未发生变化。")
+
         except Exception as e:
-            print(f"查询单号 {tracking_num} 异常: {e}")
+            print(f"❌ 查询单号 {tracking_num} 出现异常: {e}")
 
-    # 更新缓存记录
     save_cached_status(updated_status)
-
+    print(f"\n💾 写入缓存完成，当前缓存数据: {updated_status}")
 
 if __name__ == "__main__":
     check_spx_status()
